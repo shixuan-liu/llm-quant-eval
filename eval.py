@@ -1,6 +1,23 @@
 import requests
 import json
 import re
+import pandas as pd
+
+MODELS = [
+    # 问题 1:每少一位精度,准确率掉多少(llama3.2 1B,5 个精度)
+    "llama3.2:1b-instruct-q3_K_M",
+    "llama3.2:1b-instruct-q4_K_M",
+    "llama3.2:1b-instruct-q6_K",
+    "llama3.2:1b-instruct-q8_0",
+    "llama3.2:1b-instruct-fp16",
+    # 问题 2:QAT 和普通 Q4 比(gemma3 1B)
+    "gemma3:1b-it-qat",
+    "gemma3:1b-it-q4_K_M",
+    "gemma3:1b-it-fp16",
+    # 问题 3:同样约 2 GB,选大模型压缩还是小模型不压缩(qwen3.5 2B)
+    "qwen3.5:2b-q4_K_M",
+    "qwen3.5:2b-q8_0",
+]
 
 def ask_model(model, prompt,timeout=120):
     url = "http://localhost:11434/api/generate"
@@ -8,7 +25,8 @@ def ask_model(model, prompt,timeout=120):
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options":{"temperature":0, "seed":42}
+        "options":{"temperature":0, "seed":42},
+        "think": False
     }
     
     response=requests.post(url, json=payload,timeout=timeout)
@@ -57,16 +75,24 @@ def parse_answer(text):
     return None, False
 
 if __name__ == "__main__":
-    qs =load_gsm8k("data/gsm8k_test.jsonl",10)
-    correct =0
-    formatted = 0
-    for i in range(len(qs)):
-        p = build_prompt(qs[i]["question"])
-        text, token_per_s, eval_count, eval_duration = ask_model("llama3.2:1b-instruct-q4_K_M", p)
-        pred, ok = parse_answer(text)
-        gold = gold_answer(qs[i]["answer"])
-        if ok==True:
-            formatted +=1
-        if pred is not None and abs(pred - gold) < 1e-6:
-            correct+=1
-    print(f"format: {formatted/len(qs):.0%}  accuracy: {correct/len(qs):.0%}")
+    rows =[]
+    qs =load_gsm8k("data/gsm8k_test.jsonl",2)
+    for model in MODELS:
+        for i in range(len(qs)):
+            row ={}
+            row["model"]=model
+            p = build_prompt(qs[i]["question"])
+            text, token_per_s,eval_count,eval_duration  = ask_model(model, p)
+            pred, ok = parse_answer(text)
+            gold = gold_answer(qs[i]["answer"])
+            row["correct"] = pred is not None and abs(pred - gold) < 1e-6
+            row["gold"]=gold
+            row["pred"]=pred
+            row["formatted"]= ok
+            row["item_id"] = i
+            row["token_per_s"] = token_per_s
+            row["eval_count"] = eval_count
+            row["eval_duration"] = eval_duration
+            row["response"]=text
+            rows.append(row)
+    pd.DataFrame(rows).to_csv("results/gsm8k_raw.csv", index=False)
