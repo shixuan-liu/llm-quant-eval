@@ -1,3 +1,4 @@
+import argparse
 import requests
 import json
 import re
@@ -25,7 +26,7 @@ def ask_model(model, prompt,timeout=120):
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options":{"temperature":0, "seed":42},
+        "options":{"temperature":0, "seed":42, "num_predict":512},
         "think": False
     }
     
@@ -75,14 +76,24 @@ def parse_answer(text):
     return None, False
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", default="data/gsm8k_test.jsonl")
+    parser.add_argument("--out", default="results/gsm8k_raw.csv")
+    parser.add_argument("--n", type=int, default=100)
+    args = parser.parse_args()
+
     rows =[]
-    qs =load_gsm8k("data/gsm8k_test.jsonl",2)
+    qs =load_gsm8k(args.data, args.n)
     for model in MODELS:
         for i in range(len(qs)):
             row ={}
             row["model"]=model
             p = build_prompt(qs[i]["question"])
-            text, token_per_s,eval_count,eval_duration  = ask_model(model, p)
+            try:
+                text, token_per_s,eval_count,eval_duration  = ask_model(model, p)
+            except Exception as err:
+                print(f"FAILED {model} q{i}: {err}")
+                continue
             pred, ok = parse_answer(text)
             gold = gold_answer(qs[i]["answer"])
             row["correct"] = pred is not None and abs(pred - gold) < 1e-6
@@ -90,9 +101,11 @@ if __name__ == "__main__":
             row["pred"]=pred
             row["formatted"]= ok
             row["item_id"] = i
+            row["source_id"] = qs[i].get("source_id", i)
             row["token_per_s"] = token_per_s
             row["eval_count"] = eval_count
             row["eval_duration"] = eval_duration
             row["response"]=text
             rows.append(row)
-    pd.DataFrame(rows).to_csv("results/gsm8k_raw.csv", index=False)
+            print(f"done {model}: {len(rows)} rows saved", flush=True)
+        pd.DataFrame(rows).to_csv(args.out, index=False)
